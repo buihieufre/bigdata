@@ -1,6 +1,6 @@
-# Real-time Crypto Trading Advisor
+# Real-time Crypto Trading Advisor — ICT/SMC Edition
 
-Hệ thống tư vấn giao dịch tiền mã hóa thời gian thực, sử dụng **Apache Spark Structured Streaming**, **HDFS**, **XGBoost** và **Binance WebSocket**.
+Hệ thống tư vấn giao dịch tiền mã hóa thời gian thực, sử dụng **Apache Spark Structured Streaming**, **HDFS**, **XGBoost** và chiến lược **ICT / Smart Money Concept (SMC)**.
 
 ## Kiến trúc hệ thống
 
@@ -19,17 +19,18 @@ Hệ thống tư vấn giao dịch tiền mã hóa thời gian thực, sử dụ
 │  Binance API     │    │ Spark Structured     │    │  Flask API Server        │
 │  (REST + WS)     │    │ Streaming            │    │  (api.py :5000)          │
 │                  │    │ (spark_stream.py)     │    │  - Đọc features từ HDFS  │
-│  download_binance│───▶│                      │    │  - Predict XGBoost       │
-│  .py (lịch sử)  │    │ TCP:9999 ──▶ Parse   │    │  - REST API cho frontend │
-│                  │    │ ──▶ Features ──▶     │    └─────────┬────────────────┘
-│  binance_socket  │───▶│    XGBoost Predict   │              │
-│  .py (real-time) │    │ ──▶ HDFS output      │              ▼
-└──────────────────┘    └──────────────────────┘    ┌──────────────────────────┐
+│  download_binance│───▶│                      │    │  - ICT Scoring Engine    │
+│  .py (lịch sử)  │    │ TCP:9999 ──▶ Parse   │    │  - XGBoost Predict       │
+│                  │    │ ──▶ ICT Features ──▶ │    │  - REST API + Overlays   │
+│  binance_socket  │───▶│    XGBoost Predict   │    └─────────┬────────────────┘
+│  .py (real-time) │    │ ──▶ HDFS output      │              │
+└──────────────────┘    └──────────────────────┘              ▼
+                                                    ┌──────────────────────────┐
                                                     │  React Frontend          │
                                                     │  (Vite + TypeScript)     │
                                                     │  - Lightweight Charts    │
                                                     │  - Binance WebSocket     │
-                                                    │  - Real-time updates     │
+                                                    │  - LONG/SHORT signals    │
                                                     │  http://localhost:5173   │
                                                     └──────────────────────────┘
 ```
@@ -38,36 +39,59 @@ Hệ thống tư vấn giao dịch tiền mã hóa thời gian thực, sử dụ
 
 ```
 bigdata/
-├── data/                        # Dữ liệu Parquet (local + sync HDFS)
-│   ├── btc_raw.parquet          # Dữ liệu thô 3 năm BTC/USDT (1.5M nến 1 phút)
-│   └── btc_features_*.parquet   # Features đã tính cho 6 timeframes
+
 ├── models/                      # Mô hình đã train
-│   ├── xgb_model_*.pkl          # 6 mô hình XGBoost (1 per timeframe)
-│   └── thresholds.json          # Ngưỡng BUY/SELL tối ưu
-├── output/                      # Kết quả
-│   ├── signals.jsonl            # Tín hiệu real-time
-│   └── dashboard.html           # Dashboard Plotly tĩnh
+│   ├── xgb_ict_*.pkl            # 6 mô hình XGBoost ICT (1 per timeframe) ← MỚI
+│   └── thresholds.json          # Ngưỡng LONG/SHORT tối ưu
+├── output/                      # Kết quả trên HDFS
+│   └── signals/                 # Tín hiệu real-time (lưu trên HDFS)
 ├── frontend/                    # React + Vite + TypeScript
 │   └── src/
-│       ├── App.tsx              # Main app (sidebar, websocket, countdown)
-│       ├── TradingChart.tsx     # Biểu đồ nến TradingView-style
-│       └── api.ts               # API client
+│       ├── App.tsx              # Main app (ICT sidebar, websocket, countdown)
+│       ├── TradingChart.tsx     # Biểu đồ nến + LONG/SHORT markers
+│       └── api.ts               # API client (ICT types)
 ├── checkpoints/                 # Spark streaming checkpoints
 │
 │── download_binance.py          # [Bước 1] Thu thập dữ liệu lịch sử
-│── feature_engineering.py       # [Bước 2] Tính features + sync HDFS
-│── train_model.py               # [Bước 3] Train XGBoost (đọc từ HDFS)
+│── ict_features.py              # [CORE] ICT/SMC Engine — 14 features vectorized ← MỚI
+│── feature_engineering.py       # [Bước 2] Tính ICT features + sync HDFS
+│── train_model.py               # [Bước 3] Train XGBoost ICT (đọc từ HDFS)
 │── hdfs_manager.py              # [Bước 4] Quản lý HDFS (upload/đọc/ghi)
-│── binance_socket.py            # [Bước 5] WebSocket → TCP socket
+│── binance_socket.py            # [Bước 5] WebSocket → TCP socket (OHLCV full)
 │── spark_stream.py              # [Bước 6] Spark Streaming + ghi HDFS
-│── realtime_features.py         # Rolling window tính features real-time
-│── realtime_predict.py          # Inference XGBoost real-time
-│── api.py                       # [Bước 7] Flask API (đọc HDFS + predict)
-│── visualize.py                 # Tạo dashboard Plotly tĩnh
-│── dash_app.py                  # Dashboard Dash interactive
-│── scratch_eval.py              # Đánh giá threshold mô hình
+│── realtime_features.py         # Rolling window 1000 candles — ICT real-time
+│── realtime_predict.py          # Hybrid Scoring: XGBoost 60% + ICT rules 40%
+│── api.py                       # [Bước 7] Flask API (HDFS + predict + overlays)
 └── requirements.txt             # Dependencies Python
 ```
+
+## ICT / SMC Features (14 features)
+
+| Feature | Mô tả |
+|---------|--------|
+| `htf_trend` | Higher Timeframe Trend: 1=Bull, 0=Range, -1=Bear |
+| `structure_strength` | Sức mạnh cấu trúc (HH/HL vs LH/LL) |
+| `displacement_strength` | Cường độ dịch chuyển giá (body/range × ATR) |
+| `mss_strength` | Market Structure Shift strength [-1, 1] |
+| `cisd_state` | Change in State of Delivery: 1=Bull, -1=Bear |
+| `inside_bisi_mid_zone` | BISI midpoint reaction score (bullish FVG zone) |
+| `inside_sibi_mid_zone` | SIBI midpoint reaction score (bearish FVG zone) |
+| `fvg_fill_ratio` | Tỷ lệ fill Fair Value Gap [0, 1] |
+| `imbalance_reaction_score` | BISI vs SIBI net score |
+| `liquidity_sweep_detected` | 0=None, 1=Sweep Low (bullish), 2=Sweep High (bearish) |
+| `delivery_strength` | Sức mạnh delivery (efficiency × volume expansion) |
+| `momentum_score` | Tổng hợp momentum [-1, 1] |
+| `macro_window` | 0=Outside, 1=London Macro, 2=NY Macro ⚡ (xx:50→xx:10) |
+
+### ICT Macro Windows (ưu tiên cao nhất)
+
+| Giờ UTC | Macro Window |
+|---------|-------------|
+| 13:50–14:10 | **NY Open** ⭐ |
+| 17:50–18:10 | **NY PM Open** ⭐ |
+| 06:50–07:10 | London Open |
+| 18:50–19:10 | NY Power Hour |
+| 12:50–13:10 | NY Pre-Market |
 
 ## Yêu cầu hệ thống
 
@@ -116,62 +140,59 @@ python download_binance.py
 ```
 
 - Tải 3 năm nến 1 phút BTC/USDT từ Binance REST API
-- Output: `data/btc_raw.parquet` (~52 MB, ~1.5 triệu dòng)
-- Thời gian: ~15-20 phút (rate limit Binance)
+- Output: Ghi trực tiếp vào Data Lake `hdfs://.../raw/btc_raw.parquet`
+- Thời gian: ~15–20 phút (rate limit Binance)
 
-#### Bước 2 – Feature Engineering
+#### Bước 2 – ICT Feature Engineering
 
 ```bash
 python feature_engineering.py
 ```
 
-- Tính 11 chỉ báo kỹ thuật (RSI, EMA, MACD, Bollinger Bands, ...)
+- Tính **14 ICT/SMC features** (vectorized, xử lý 1.5M rows trong ~17 giây)
 - Tạo features cho 6 timeframes: `1min`, `5min`, `15min`, `1H`, `4H`, `1D`
-- Tự động sync lên HDFS (nếu HDFS đang chạy)
-- Output: `data/btc_features_*.parquet` (6 files, tổng ~246 MB)
+- Output: Ghi trực tiếp lên HDFS `hdfs://.../features/btc_features_*.parquet`
 
-#### Bước 3 – Train mô hình XGBoost
+> ⚠️ **Lưu ý:** Phiên bản cũ dùng RSI/EMA/MACD. Phiên bản ICT mới **không tương thích** với model cũ.
+
+#### Bước 3 – Train mô hình XGBoost ICT
 
 ```bash
 python train_model.py
 ```
 
-- Đọc features từ HDFS (fallback local nếu HDFS chưa chạy)
+- Đọc ICT features trực tiếp từ HDFS (Bắt buộc)
 - Train 6 mô hình XGBoost (1 per timeframe)
-- Tìm ngưỡng BUY/SELL tối ưu dựa trên precision
-- Đồng bộ `thresholds.json` lên HDFS
-- Output: `models/xgb_model_*.pkl` (6 files) + `models/thresholds.json`
+- Tìm ngưỡng LONG/SHORT tối ưu dựa trên precision
+- Output: `models/xgb_ict_*.pkl` (6 files) + `models/thresholds.json`
 
 ---
 
 ### Phase 2: Lưu trữ & Xác nhận HDFS
 
-#### Bước 4 – Khởi động HDFS & Upload dữ liệu
+#### Bước 4 – Khởi động HDFS & Kiểm tra
 
 ```bash
 # Khởi động HDFS
 start-dfs.sh
 
-# Upload toàn bộ dữ liệu lên HDFS
-python hdfs_manager.py upload
-
-# Kiểm tra dữ liệu trên HDFS
+# Kiểm tra dữ liệu trên HDFS (đã tự động được tải lên từ Bước 1, 2, 3)
 python hdfs_manager.py list
 ```
 
-Cấu trúc HDFS sau khi upload:
+Cấu trúc HDFS sau khi Pipeline tự động ghi dữ liệu:
 
 ```
 hdfs://127.0.0.1:9000/user/hdoop/bigdata/
 ├── raw/btc_raw.parquet               (50.6 MB)
 ├── features/
-│   ├── btc_features_1min.parquet     (175.9 MB – 1,578,202 dòng)
-│   ├── btc_features_5min.parquet     (38.1 MB – 315,611 dòng)
-│   ├── btc_features_15min.parquet    (14.6 MB – 105,179 dòng)
-│   ├── btc_features_1H.parquet      (3.6 MB – 26,251 dòng)
-│   ├── btc_features_4H.parquet      (913.7 KB – 6,523 dòng)
-│   └── btc_features_1D.parquet      (143.3 KB – 993 dòng)
-├── models/thresholds.json            (371 bytes)
+│   ├── btc_features_1min.parquet     (175.9 MB – 1,578,235 dòng × 24 cols)
+│   ├── btc_features_5min.parquet     (38.1 MB – 315,644 dòng × 24 cols)
+│   ├── btc_features_15min.parquet    (14.6 MB – 105,212 dòng × 24 cols)
+│   ├── btc_features_1H.parquet       (3.6 MB – 26,300 dòng × 24 cols)
+│   ├── btc_features_4H.parquet       (913.7 KB – 6,572 dòng × 24 cols)
+│   └── btc_features_1D.parquet       (143.3 KB – 1,092 dòng × 24 cols)
+├── models/thresholds.json
 └── output/                           (Spark ghi kết quả)
 ```
 
@@ -203,8 +224,8 @@ python binance_socket.py
 ```
 
 - Kết nối Binance WebSocket (`btcusdt@kline_1s`)
-- Chuyển tiếp dữ liệu qua TCP socket (port 9999)
-- Chờ Spark kết nối trước khi nhận dữ liệu
+- Gửi **OHLCV đầy đủ** (open, high, low, close, volume, timestamp) qua TCP socket (port 9999)
+- Cần OHLCV để tính ICT features (MSS, FVG, BISI/SIBI)
 
 #### Terminal 2 – Spark Structured Streaming
 
@@ -213,10 +234,11 @@ cd ~/bigdata && source backend/env/bin/activate
 python spark_stream.py
 ```
 
-- Đọc stream từ TCP:9999
-- Parse JSON → tính features (rolling window 250 điểm) → predict XGBoost
-- Ghi tín hiệu ra `output/signals.jsonl` (local) + HDFS (mỗi 100 signals)
-- **Lưu ý:** Cần chờ ~250 giây (warm-up) trước khi có tín hiệu đầu tiên
+- Đọc stream OHLCV từ TCP:9999
+- Rolling window **1000 candles** (~16h40m) → tính ICT features → predict XGBoost
+- **Data Lake Branching**: Append nối đuôi trực tiếp dữ liệu nến thô (OHLCV) vào `hdfs://.../raw/btc_raw.parquet`
+- Ghi tín hiệu dự đoán ra HDFS `hdfs://.../output/signals/`
+- **Lưu ý:** Cần chờ ~1000 giây (warm-up) cho rolling window đầy đủ
 
 #### Terminal 3 – Flask API Server
 
@@ -226,11 +248,12 @@ python api.py
 ```
 
 - Chạy trên `http://localhost:5000`
-- Đọc features từ HDFS (fallback local)
+- Đọc ICT features trực tiếp từ HDFS (không dùng local disk)
 - Bổ sung nến thiếu từ Binance REST API (data patching)
-- Predict XGBoost cho toàn bộ dữ liệu
+- **ICT Scoring Engine**: 60% XGBoost + 40% rule-based ICT confluence
+- Nhân hệ số tối đa ×1.30 trong NY Macro windows
 - Endpoints:
-  - `GET /api/data?timeframe=5min` – Dữ liệu + tín hiệu
+  - `GET /api/data?timeframe=5min` – Dữ liệu + tín hiệu LONG/SHORT/NEUTRAL + overlays
   - `GET /api/hdfs-status` – Trạng thái HDFS
 
 #### Terminal 4 – React Frontend
@@ -241,22 +264,11 @@ npm run dev
 ```
 
 - Chạy trên `http://localhost:5173`
-- Biểu đồ nến TradingView-style (Lightweight Charts)
-- WebSocket Binance trực tiếp → cập nhật nến mỗi giây
-- Sidebar: AI signal, probability, EMA, countdown timer
+- Bố cục Resizable (react-resizable-panels): Biểu đồ nến TradingView-style (trên) & Bảng Real-time ICT Features (dưới).
+- Múi giờ đồng bộ hoàn toàn theo **UTC-4 (America/New_York)** chuẩn ICT.
+- WebSocket Binance trực tiếp → cập nhật nến mỗi giây.
+- Sidebar: ICT bias (LONG/SHORT/NEUTRAL), Prob Up/Down, Killzone, HTF Bias.
 - 6 timeframes: 1min, 5min, 15min, 1H, 4H, 1D
-
----
-
-### Phase 4: Trực quan tĩnh (tùy chọn)
-
-```bash
-# Dashboard Plotly (output/dashboard.html)
-python visualize.py
-
-# Dashboard Dash interactive (localhost:5000)
-python dash_app.py
-```
 
 ---
 
@@ -264,39 +276,46 @@ python dash_app.py
 
 ```
 1. download_binance.py
-   Binance REST API ──▶ data/btc_raw.parquet (local)
+   Binance REST API ──▶ PySpark ──▶ hdfs://.../raw/btc_raw.parquet
 
-2. feature_engineering.py
-   btc_raw.parquet ──▶ tính RSI, EMA, MACD, BB, ... ──▶ btc_features_*.parquet (local + HDFS)
+2. feature_engineering.py  [~17 giây cho 1.5M rows]
+   HDFS raw data ──▶ ict_features.py (14 ICT features vectorized)
+                 ──▶ PySpark ──▶ hdfs://.../features/btc_features_*.parquet
 
 3. train_model.py
-   HDFS features ──▶ train XGBoost × 6 ──▶ models/*.pkl + thresholds.json (local + HDFS)
+   HDFS ICT features ──▶ train XGBoost × 6 ──▶ models/xgb_ict_*.pkl + thresholds.json
 
 4. hdfs_manager.py
-   local data ──▶ HDFS upload ──▶ Spark đọc lại xác nhận
+   (Chỉ dùng cho các utilities kiểm tra/đọc dữ liệu từ HDFS)
 
 5. binance_socket.py  →  spark_stream.py
-   Binance WS ──▶ TCP:9999 ──▶ Spark parse JSON ──▶ features ──▶ predict ──▶ signals (local + HDFS)
+   Binance WS (OHLCV) ──▶ TCP:9999 ──▶ Spark
+   ──▶ Nhánh 1: Append nến thô vào HDFS raw data
+   ──▶ Nhánh 2: Tính ICT features ──▶ predict ──▶ HDFS signals
 
 6. api.py
-   HDFS features + Binance REST (patch) ──▶ XGBoost predict ──▶ JSON API
+   HDFS ICT features + Binance REST (patch)
+   ──▶ ICT Scoring (60% XGBoost + 40% rules + NY Macro ×1.30)
+   ──▶ LONG / SHORT / NEUTRAL + JSON API
 
 7. frontend (React)
-   API :5000 + Binance WS ──▶ Lightweight Charts ──▶ UI real-time
+   API :5000 + Binance WS ──▶ Lightweight Charts
+   ──▶ Candlestick + LONG/SHORT markers + ICT sidebar
 ```
 
 ## Công nghệ sử dụng
 
 | Thành phần | Công nghệ | Vai trò |
-|------------|-----------|---------|
+|------------|-----------|---------| 
 | Lưu trữ phân tán | **HDFS (Hadoop 3.4.3)** | Lưu dữ liệu thô, features, kết quả |
 | Xử lý streaming | **Spark Structured Streaming 3.5** | Micro-batch từ TCP socket |
-| Machine Learning | **XGBoost 2.0** | Phân loại BUY/SELL/HOLD |
-| Nguồn dữ liệu | **Binance API + WebSocket** | REST (lịch sử) + WS (real-time) |
-| Backend API | **Flask + Flask-CORS** | REST API cho frontend |
+| Machine Learning | **XGBoost 2.0** | Phân loại LONG/SHORT/NEUTRAL |
+| Trading Strategy | **ICT / Smart Money Concept** | 14 features: MSS, FVG, BISI/SIBI, Liquidity, Macro |
+| Nguồn dữ liệu | **Binance API + WebSocket** | REST (lịch sử) + WS (real-time OHLCV) |
+| Backend API | **Flask + Flask-CORS** | REST API + ICT Scoring Engine |
 | Frontend | **React 19 + TypeScript + Vite** | Dashboard real-time |
-| Biểu đồ | **Lightweight Charts 4.1** | TradingView-style candlestick |
-| Feature Engineering | **ta (Technical Analysis)** | RSI, MACD, EMA, Bollinger Bands |
+| Biểu đồ | **Lightweight Charts 4.1** | TradingView-style candlestick + markers |
+| Feature Engineering | **NumPy/Pandas vectorized** | ICT features O(n) — không dùng ta library |
 | Định dạng dữ liệu | **Apache Parquet** | Columnar, nén tốt, Spark-native |
 
 ## Xử lý lỗi thường gặp
@@ -306,7 +325,8 @@ python dash_app.py
 | `Connection refused` (HDFS) | HDFS chưa chạy | `start-dfs.sh` |
 | `Connection refused` (port 9999) | `binance_socket.py` chưa chạy | Chạy Terminal 1 trước Terminal 2 |
 | `Address already in use` (port 5000) | Flask đang chạy ở process khác | `lsof -i :5000` rồi `kill <PID>` |
-| Không có tín hiệu (Spark) | Warm-up period | Chờ ~250 giây cho rolling window đầy |
+| Không có tín hiệu (Spark) | Warm-up period | Chờ ~1000 giây cho rolling window đầy |
+| `Missing ICT features` | feature_engineering.py chưa chạy | Chạy Bước 2 + Bước 3 lại |
+| `feature_names mismatch` | Model cũ (RSI/EMA) không tương thích | Xóa `models/xgb_model_*.pkl`, chạy lại `train_model.py` |
 | `Checkpoint error` (Spark) | Checkpoint cũ không tương thích | Xóa thư mục `checkpoints/` |
-| `Model Not Found` | Chưa train mô hình | Chạy `python train_model.py` |
-| Parquet timestamp error (Spark) | Pandas dùng nanosecond | Đã xử lý trong `hdfs_manager.py` |
+| `feature_engineering` quá chậm | Python for-loop cũ | Đã fix: dùng vectorized rolling O(n) — ~17s cho 1.5M rows |

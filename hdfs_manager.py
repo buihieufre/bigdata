@@ -45,6 +45,9 @@ def get_spark_session(app_name: str = "CryptoHDFS") -> SparkSession:
     """
     spark = SparkSession.builder \
         .appName(app_name) \
+        .config("spark.driver.memory", "4g") \
+        .config("spark.executor.memory", "4g") \
+        .config("spark.sql.execution.arrow.pyspark.enabled", "true") \
         .config("spark.sql.parquet.compression.codec", "snappy") \
         .config("spark.sql.parquet.datetimeRebaseModeInRead", "CORRECTED") \
         .config("spark.sql.parquet.int96RebaseModeInRead", "CORRECTED") \

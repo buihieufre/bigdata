@@ -3,6 +3,7 @@ import { Activity, RefreshCw } from 'lucide-react';
 import { fetchChartData } from './api';
 import type { ChartResponse } from './api';
 import { TradingChart } from './TradingChart';
+import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 
 function App() {
   const [chartResponse, setChartResponse] = useState<ChartResponse | null>(null);
@@ -11,6 +12,7 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [realtimeCandle, setRealtimeCandle] = useState<any>(null);
   const [countdown, setCountdown] = useState<string>('');
+  const [tableLimit, setTableLimit] = useState<number>(10);
 
   // Use refs to avoid stale closures in WebSocket and timer callbacks
   const closeTimeRef = useRef<number>(0);
@@ -106,7 +108,16 @@ function App() {
   const latestData = data.length > 0 ? data[data.length - 1] : null;
   const displayData = realtimeCandle ? { ...latestData, ...realtimeCandle } : latestData;
   const thresholds = chartResponse?.thresholds || { buy: 0.65, sell: 0.30 };
-  const emaPeriods = chartResponse?.ema_periods || { fast: 9, slow: 21 };
+  const marketCtx = chartResponse?.market_context;
+
+  // Process data for the rolling table
+  const recentTableData = data.slice(-tableLimit).map((d, index, arr) => {
+    // If it's the last element and we have a realtime update, merge them
+    if (index === arr.length - 1 && realtimeCandle) {
+      return { ...d, ...realtimeCandle };
+    }
+    return d;
+  }).reverse(); // Reverse to show newest on top
 
   const priceColor = displayData
     ? (displayData.close >= displayData.open ? '#26a69a' : '#ef5350')
@@ -139,99 +150,213 @@ function App() {
       </header>
 
       <div className="dashboard-layout">
-        <div className="panel chart-container">
-          {loading ? (
-            <div className="loading-container">
-              <RefreshCw className="spinner" size={32} />
-              <p>Loading market data...</p>
-            </div>
-          ) : error ? (
-            <div className="loading-container" style={{ color: '#ef5350' }}>
-              <p>{error}</p>
-              <button onClick={() => loadData()} style={{
-                marginTop: '16px', padding: '8px 16px', 
-                background: '#2962ff', color: 'white', 
-                border: 'none', borderRadius: '4px', cursor: 'pointer'
-              }}>Retry</button>
-            </div>
-          ) : (
-            chartResponse && <TradingChart chartResponse={chartResponse} realtimeCandle={realtimeCandle} />
-          )}
-        </div>
+        <PanelGroup direction="vertical">
+          <Panel defaultSize={70} minSize={30}>
+            <PanelGroup direction="horizontal">
+              <Panel defaultSize={75} minSize={30}>
+                <div className="panel chart-container" style={{ height: '100%', border: 'none', background: 'var(--panel-bg)', borderRadius: '8px', overflow: 'hidden' }}>
+                  {loading ? (
+                    <div className="loading-container">
+                      <RefreshCw className="spinner" size={32} />
+                      <p>Loading market data...</p>
+                    </div>
+                  ) : error ? (
+                    <div className="loading-container" style={{ color: '#ef5350' }}>
+                      <p>{error}</p>
+                      <button onClick={() => loadData()} style={{
+                        marginTop: '16px', padding: '8px 16px', 
+                        background: '#2962ff', color: 'white', 
+                        border: 'none', borderRadius: '4px', cursor: 'pointer'
+                      }}>Retry</button>
+                    </div>
+                  ) : (
+                    chartResponse && <TradingChart chartResponse={chartResponse} realtimeCandle={realtimeCandle} />
+                  )}
+                </div>
+              </Panel>
+              
+              <PanelResizeHandle className="resize-handle-vertical" />
+              
+              <Panel defaultSize={25} minSize={15}>
+                <div className="sidebar" style={{ height: '100%' }}>
+                  <div className="panel card" style={{ height: '100%', overflowY: 'auto' }}>
+                    <div className="card-title">ICT Signal</div>
+                    {displayData ? (
+                      <>
+                        {/* ICT Bias badge */}
+                        <div className={`signal-value signal-${displayData.signal}`}>
+                          {displayData.bias ?? displayData.signal}
+                        </div>
 
-        <div className="sidebar">
-          <div className="panel card">
-            <div className="card-title">AI Prediction Signal</div>
-            {displayData ? (
-              <>
-                <div className={`signal-value signal-${displayData.signal}`}>
-                  {displayData.signal}
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '12px', fontSize: '14px' }}>
-                  <span style={{ color: '#787b86' }}>Probability</span>
-                  <span style={{ fontWeight: 600 }}>{(displayData.prob * 100).toFixed(1)}%</span>
-                </div>
-                <div className="prob-bar-container">
-                  <div 
-                    className="prob-bar" 
-                    style={{ 
-                      width: `${displayData.prob * 100}%`,
-                      backgroundColor: displayData.prob >= thresholds.buy ? '#26a69a' : displayData.prob <= thresholds.sell ? '#ef5350' : '#2962ff'
-                    }}
-                  ></div>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '6px', fontSize: '12px', color: '#787b86' }}>
-                  <span>SELL &le; {thresholds.sell.toFixed(2)}</span>
-                  <span>BUY &ge; {thresholds.buy.toFixed(2)}</span>
-                </div>
-              </>
-            ) : (
-              <p style={{ color: '#787b86' }}>Waiting for data...</p>
-            )}
-          </div>
-          
-          <div className="panel card" style={{ flex: 1 }}>
-            <div className="card-title">Market Overview (BTC/USDT)</div>
-            {displayData && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', fontSize: '14px' }}>
-                {/* Live Price + Countdown on the same line */}
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ color: '#787b86' }}>Price</span>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span style={{ fontWeight: 700, fontSize: '16px', color: priceColor, transition: 'color 0.3s' }}>
-                      ${displayData.close.toFixed(2)}
-                    </span>
-                    {countdown && (
-                      <span style={{
-                        fontSize: '11px',
-                        fontFamily: 'monospace',
-                        color: '#ff9800',
-                        background: 'rgba(255,152,0,0.12)',
-                        padding: '2px 6px',
-                        borderRadius: '4px',
-                        letterSpacing: '0.5px',
-                      }}>
-                        ⏱ {countdown}
-                      </span>
+                        {/* Probability Up/Down */}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '12px', fontSize: '14px' }}>
+                          <span style={{ color: '#787b86' }}>Prob Up</span>
+                          <span style={{ fontWeight: 600, color: '#26a69a' }}>
+                            {((displayData.probability_up ?? displayData.prob) * 100).toFixed(1)}%
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px' }}>
+                          <span style={{ color: '#787b86' }}>Prob Down</span>
+                          <span style={{ fontWeight: 600, color: '#ef5350' }}>
+                            {((displayData.probability_down ?? (1 - displayData.prob)) * 100).toFixed(1)}%
+                          </span>
+                        </div>
+
+                        {/* Probability bar */}
+                        <div className="prob-bar-container" style={{ marginTop: '8px' }}>
+                          <div
+                            className="prob-bar"
+                            style={{
+                              width: `${(displayData.probability_up ?? displayData.prob) * 100}%`,
+                              backgroundColor: displayData.signal === 'BUY' ? '#26a69a' : displayData.signal === 'SELL' ? '#ef5350' : '#2962ff'
+                            }}
+                          ></div>
+                        </div>
+
+
+                        {/* Killzone / Macro */}
+                        {marketCtx && (
+                          <div style={{ marginTop: '10px', padding: '6px 8px', borderRadius: '4px', background: marketCtx.macro_active ? 'rgba(41,98,255,0.15)' : 'rgba(120,123,134,0.1)', fontSize: '12px' }}>
+                            <div style={{ color: marketCtx.macro_active ? '#2962ff' : '#787b86', fontWeight: 600 }}>
+                              {marketCtx.killzone}
+                            </div>
+                            <div style={{ color: '#787b86', marginTop: '2px' }}>
+                              HTF: <span style={{ color: marketCtx.htf_bias === 'BULLISH' ? '#26a69a' : marketCtx.htf_bias === 'BEARISH' ? '#ef5350' : '#787b86', fontWeight: 600 }}>{marketCtx.htf_bias}</span>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* ICT Context */}
+                        {displayData.ict_context && (
+                          <div style={{ marginTop: '8px', fontSize: '11px', color: '#787b86', lineHeight: 1.4, wordBreak: 'break-word' }}>
+                            {displayData.ict_context}
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <p style={{ color: '#787b86' }}>Waiting for data...</p>
                     )}
                   </div>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ color: '#787b86' }}>Volume</span>
-                  <span style={{ fontWeight: 600 }}>{displayData.volume.toFixed(2)} BTC</span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ color: '#787b86' }}>EMA {emaPeriods.fast}</span>
-                  <span style={{ fontWeight: 600 }}>{displayData.ema_fast ? `$${displayData.ema_fast.toFixed(2)}` : 'N/A'}</span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ color: '#787b86' }}>EMA {emaPeriods.slow}</span>
-                  <span style={{ fontWeight: 600 }}>{displayData.ema_slow ? `$${displayData.ema_slow.toFixed(2)}` : 'N/A'}</span>
+              </Panel>
+            </PanelGroup>
+          </Panel>
+
+          <PanelResizeHandle className="resize-handle-horizontal" />
+
+          <Panel defaultSize={30} minSize={15}>
+            <div className="panel card" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                <div className="card-title" style={{ margin: 0 }}>Real-time ICT Features</div>
+                <div>
+                  <span style={{ fontSize: '12px', color: '#787b86' }}>Show:</span>
+                  <select 
+                    className="limit-selector" 
+                    value={tableLimit} 
+                    onChange={(e) => setTableLimit(Number(e.target.value))}
+                  >
+                    <option value={5}>5 Rows</option>
+                    <option value={10}>10 Rows</option>
+                    <option value={15}>15 Rows</option>
+                    <option value={20}>20 Rows</option>
+                  </select>
                 </div>
               </div>
-            )}
-          </div>
-        </div>
+
+              <div className="ict-table-container" style={{ flex: 1, overflowY: 'auto' }}>
+                <table className="ict-table">
+                  <thead>
+                    <tr>
+                      <th style={{ position: 'sticky', top: 0, backgroundColor: 'var(--panel-bg)', zIndex: 1 }}>Time</th>
+                      <th style={{ position: 'sticky', top: 0, backgroundColor: 'var(--panel-bg)', zIndex: 1 }}>Price</th>
+                      <th style={{ position: 'sticky', top: 0, backgroundColor: 'var(--panel-bg)', zIndex: 1 }}>HTF Trend</th>
+                      <th style={{ position: 'sticky', top: 0, backgroundColor: 'var(--panel-bg)', zIndex: 1 }}>MSS</th>
+                      <th style={{ position: 'sticky', top: 0, backgroundColor: 'var(--panel-bg)', zIndex: 1 }}>Liq Sweep</th>
+                      <th style={{ position: 'sticky', top: 0, backgroundColor: 'var(--panel-bg)', zIndex: 1 }}>Bias</th>
+                      <th style={{ position: 'sticky', top: 0, backgroundColor: 'var(--panel-bg)', zIndex: 1 }}>Prob (U/D)</th>
+                      <th style={{ position: 'sticky', top: 0, backgroundColor: 'var(--panel-bg)', zIndex: 1 }}>Macro</th>
+                      <th style={{ position: 'sticky', top: 0, backgroundColor: 'var(--panel-bg)', zIndex: 1 }}>BISI</th>
+                      <th style={{ position: 'sticky', top: 0, backgroundColor: 'var(--panel-bg)', zIndex: 1 }}>SIBI</th>
+                      <th style={{ position: 'sticky', top: 0, backgroundColor: 'var(--panel-bg)', zIndex: 1 }}>Context</th>
+                      <th style={{ position: 'sticky', top: 0, backgroundColor: 'var(--panel-bg)', zIndex: 1 }}>Signal</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {recentTableData.map((row: any, i: number) => {
+                      const date = new Date((row.time || 0) * 1000);
+                      const timeStr = date.toLocaleString('en-US', { timeZone: 'America/New_York', hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                      
+                      let htfLabel = "RANGING";
+                      let htfColor = "#787b86";
+                      if (row.htf_trend === 1) { htfLabel = "BULLISH"; htfColor = "#26a69a"; }
+                      if (row.htf_trend === -1) { htfLabel = "BEARISH"; htfColor = "#ef5350"; }
+                      
+                      let mssLabel = "-";
+                      let mssColor = "#787b86";
+                      if (row.mss_strength && Math.abs(row.mss_strength) > 0.1) {
+                        mssLabel = row.mss_strength > 0 ? "BULL MSS" : "BEAR MSS";
+                        mssColor = row.mss_strength > 0 ? "#26a69a" : "#ef5350";
+                      }
+
+                      let liqLabel = "-";
+                      let liqColor = "#787b86";
+                      if (row.liquidity_sweep_detected === 1) { liqLabel = "SWEPT LOW"; liqColor = "#26a69a"; }
+                      if (row.liquidity_sweep_detected === 2) { liqLabel = "SWEPT HIGH"; liqColor = "#ef5350"; }
+
+                      let sigLabel = (row.signal || "NEUTRAL").replace('_', ' ');
+                      let sigColor = "#787b86";
+                      if (sigLabel.includes("LONG")) sigColor = "#26a69a";
+                      if (sigLabel.includes("SHORT")) sigColor = "#ef5350";
+
+                      let biasLabel = row.bias || "-";
+                      let biasColor = "#787b86";
+                      if (biasLabel === "LONG") biasColor = "#26a69a";
+                      if (biasLabel === "SHORT") biasColor = "#ef5350";
+                      
+                      let probUp = row.probability_up ?? row.prob ?? 0;
+                      let probDn = row.probability_down ?? (1 - probUp);
+                      let probLabel = `${(probUp*100).toFixed(0)}% / ${(probDn*100).toFixed(0)}%`;
+                      
+                      let macroLabel = "-";
+                      if (row.macro_window === 1) macroLabel = "London";
+                      if (row.macro_window === 2) macroLabel = "NY";
+                      
+                      let bisiLabel = row.inside_bisi_mid_zone === 1 ? "IN" : "-";
+                      let sibiLabel = row.inside_sibi_mid_zone === 1 ? "IN" : "-";
+                      
+                      let ctxLabel = row.ict_context || "-";
+                      if (ctxLabel.length > 30) ctxLabel = ctxLabel.substring(0, 30) + "...";
+
+                      return (
+                        <tr key={`${row.time}-${i}`}>
+                          <td style={{ color: '#787b86' }}>
+                            {timeStr}
+                            {i === 0 && countdown && (
+                              <span style={{ marginLeft: '6px', fontSize: '10px', color: '#ff9800' }}>
+                                ({countdown})
+                              </span>
+                            )}
+                          </td>
+                          <td style={{ fontWeight: 600 }}>${Number(row.close).toFixed(1)}</td>
+                          <td style={{ color: htfColor }}>{htfLabel}</td>
+                          <td style={{ color: mssColor }}>{mssLabel}</td>
+                          <td style={{ color: liqColor }}>{liqLabel}</td>
+                          <td style={{ color: biasColor }}>{biasLabel}</td>
+                          <td style={{ color: '#787b86', fontSize: '12px' }}>{probLabel}</td>
+                          <td style={{ color: macroLabel !== '-' ? '#2962ff' : '#787b86' }}>{macroLabel}</td>
+                          <td style={{ color: bisiLabel === 'IN' ? '#26a69a' : '#787b86' }}>{bisiLabel}</td>
+                          <td style={{ color: sibiLabel === 'IN' ? '#ef5350' : '#787b86' }}>{sibiLabel}</td>
+                          <td style={{ color: '#787b86', fontSize: '12px' }}>{ctxLabel}</td>
+                          <td style={{ color: sigColor, fontWeight: 600 }}>{sigLabel}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </Panel>
+        </PanelGroup>
       </div>
     </>
   );

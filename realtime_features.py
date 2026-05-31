@@ -1,59 +1,88 @@
+"""
+Realtime ICT Feature Generator
+================================
+Stateful generator dùng cho Spark Structured Streaming.
+Maintains a rolling window of 1000 1-min candles (~16h40m)
+để đảm bảo đủ context xem cấu trúc Macro liên phiên.
+"""
+
 import pandas as pd
 import numpy as np
-import ta
+from ict_features import compute_all_ict_features, ICT_FEATURES
 
-class RealtimeFeatureGenerator:
+
+class RealtimeICTFeatureGenerator:
     """
-    Stateful feature generator for streaming data.
-    Maintains a rolling window of recent prices.
+    Stateful ICT feature generator cho streaming data.
+    Cần full OHLCV + timestamp (khác với version cũ chỉ dùng close/volume).
+
+    Window 1000 candles (1-min) = ~16h40m:
+      - Đủ thấy Asian → London → NY session structure
+      - Đủ detect BISI/SIBI từ session trước
+      - Đủ detect Macro Windows xx:50→xx:10
     """
-    WINDOW_SIZE = 250
-    history = []
-    
+
+    WINDOW_SIZE = 1000   # 1000 × 1-min = 16h40m
+    MIN_WINDOW  = 50     # Minimum để tính ICT (swing detection cần ít nhất 50)
+
+    history: list = []
+
     @classmethod
-    def update(cls, close: float, volume: float) -> pd.DataFrame:
+    def reset(cls):
+        cls.history = []
+
+    @classmethod
+    def update(cls,
+               open_: float,
+               high: float,
+               low: float,
+               close: float,
+               volume: float,
+               timestamp_ms: int) -> pd.DataFrame | None:
         """
-        Add new price point and calculate features if window is full
+        Thêm candle mới vào rolling window và tính ICT features.
+
+        Args:
+            open_, high, low, close, volume: OHLCV values
+            timestamp_ms: kline open time từ Binance (milliseconds UTC)
+
+        Returns:
+            pd.DataFrame với 1 row = ICT features của candle hiện tại,
+            hoặc None nếu chưa đủ MIN_WINDOW candles.
         """
-        cls.history.append({'close': close, 'volume': volume})
-        
-        # Maintain window size
+        ts_utc = pd.Timestamp(timestamp_ms, unit='ms', tz='UTC').tz_localize(None)
+
+        cls.history.append({
+            'open':      float(open_),
+            'high':      float(high),
+            'low':       float(low),
+            'close':     float(close),
+            'volume':    float(volume),
+            'timestamp': ts_utc,
+        })
+
+        # Maintain rolling window
         if len(cls.history) > cls.WINDOW_SIZE:
             cls.history.pop(0)
-            
-        # Only generate features if we have enough data
-        if len(cls.history) == cls.WINDOW_SIZE:
-            df = pd.DataFrame(cls.history)
-            
-            # Calculate features (same as training)
-            df['rsi'] = ta.momentum.rsi(df['close'], window=14)
-            df['ema_fast'] = ta.trend.ema_indicator(df['close'], window=9)
-            df['ema_slow'] = ta.trend.ema_indicator(df['close'], window=21)
-            
-            macd = ta.trend.MACD(df['close'])
-            df['macd'] = macd.macd()
-            df['macd_signal'] = macd.macd_signal()
-            
-            bollinger = ta.volatility.BollingerBands(df['close'], window=20, window_dev=2)
-            df['bb_high'] = bollinger.bollinger_hband()
-            df['bb_low'] = bollinger.bollinger_lband()
-            
-            df['return_1'] = df['close'].pct_change(1)
-            df['return_5'] = df['close'].pct_change(5)
-            df['volatility'] = df['return_1'].rolling(window=20).std()
-            
-            # Return only the latest row's features
-            features = [
-                'rsi', 'ema_fast', 'ema_slow', 'macd', 'macd_signal', 
-                'bb_high', 'bb_low', 'return_1', 'return_5', 'volatility', 'volume'
-            ]
-            
-            latest_features = df[features].iloc[-1:]
-            
-            # Check for NaNs
-            if latest_features.isnull().values.any():
-                return None
-                
-            return latest_features
-            
-        return None
+
+        # Need minimum window to compute meaningful ICT features
+        if len(cls.history) < cls.MIN_WINDOW:
+            return None
+
+        df = pd.DataFrame(cls.history)
+
+        try:
+            df_ict = compute_all_ict_features(df)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"ICT compute error: {e}")
+            return None
+
+        # Return only the latest row's features
+        latest = df_ict[ICT_FEATURES].iloc[-1:]
+
+        # Safety: drop if any core feature is NaN
+        if latest.isnull().values.any():
+            return None
+
+        return latest

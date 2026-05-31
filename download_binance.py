@@ -14,8 +14,8 @@ logger = logging.getLogger(__name__)
 SYMBOL = 'BTCUSDT'
 INTERVAL = '1m'
 LIMIT = 1000
-OUTPUT_DIR = 'data'
-OUTPUT_FILE = os.path.join(OUTPUT_DIR, 'btc_raw.parquet')
+OUTPUT_DIR = 'hdfs://127.0.0.1:9000/user/hdoop/bigdata/raw'
+OUTPUT_FILE = f"{OUTPUT_DIR}/btc_raw.parquet"
 
 def get_historical_klines(symbol, interval, start_ts, end_ts):
     """
@@ -105,13 +105,20 @@ def main():
     # Select important columns
     df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
     
-    # Ensure directory exists
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    # Ensure directory exists is not needed for Spark (it creates it)
     
-    # Save to Parquet
-    logger.info(f"Saving {len(df)} rows to {OUTPUT_FILE}...")
-    df.to_parquet(OUTPUT_FILE, index=False)
-    logger.info(f"Data saved successfully. Final Shape: {df.shape}")
+    # Save to Parquet via Spark to HDFS
+    logger.info(f"Saving {len(df)} rows to HDFS: {OUTPUT_FILE}...")
+    from pyspark.sql import SparkSession
+    spark = SparkSession.builder \
+        .appName("BinanceDownloader") \
+        .config("spark.sql.parquet.outputTimestampType", "TIMESTAMP_MICROS") \
+        .getOrCreate()
+    
+    sdf = spark.createDataFrame(df)
+    sdf.write.mode("overwrite").parquet(OUTPUT_FILE)
+    spark.stop()
+    logger.info(f"Data saved successfully to HDFS. Final Shape: {df.shape}")
 
 if __name__ == "__main__":
     main()

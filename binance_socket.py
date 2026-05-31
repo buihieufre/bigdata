@@ -26,12 +26,16 @@ def on_message(ws, message, conn):
         data = json.loads(message)
         kline = data['k']
         
-        # Parse payload
+        # Parse payload — full OHLCV + timestamp for ICT features
         payload = {
-            "symbol": kline['s'],
-            "close": float(kline['c']),
-            "volume": float(kline['v']),
-            "is_closed": kline['x']
+            "symbol":    kline['s'],
+            "open":      float(kline['o']),
+            "high":      float(kline['h']),
+            "low":       float(kline['l']),
+            "close":     float(kline['c']),
+            "volume":    float(kline['v']),
+            "timestamp": int(kline['t']),   # kline open time (ms UTC)
+            "is_closed": kline['x'],
         }
         
         # Emit over TCP

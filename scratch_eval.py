@@ -1,26 +1,33 @@
 import pandas as pd
 import numpy as np
 import joblib
+import sys
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+from ict_features import ICT_FEATURES
 
-def evaluate_thresholds():
-    # Load test data (we'll just use the features file and do a simple split or just evaluate on the whole set for now to find optimal threshold)
+def evaluate_thresholds(tf='1min'):
+    input_file = f'data/btc_features_{tf}.parquet'
     try:
-        df = pd.read_csv('data/btc_features.csv')
+        df = pd.read_parquet(input_file)
     except Exception as e:
-        print(f"Error loading data: {e}")
+        print(f"Error loading data: {e}. Make sure to run feature_engineering.py first.")
         return
 
     # Split identical to train_model.py (80/20 time series split)
     split_idx = int(len(df) * 0.8)
     test_df = df.iloc[split_idx:].copy()
 
-    features = ['rsi', 'ema9', 'ema21', 'macd', 'macd_signal', 'bb_high', 'bb_low', 'return_1', 'return_5', 'volatility', 'volume']
-    X_test = test_df[features]
+    X_test = test_df[ICT_FEATURES]
     y_test = test_df['target']
 
-    model = joblib.load('models/xgb_model.pkl')
-    probs = model.predict_proba(X_test)[:, 1]
+    model_file = f'models/xgb_ict_{tf}.pkl'
+    try:
+        model = joblib.load(model_file)
+    except Exception as e:
+        print(f"Error loading model: {e}. Run train_model.py first.")
+        return
+        
+    probs = model.predict_proba(X_test.fillna(0))[:, 1]
 
     thresholds = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8]
     
@@ -69,4 +76,6 @@ def evaluate_thresholds():
         print(f"{thresh:<10.2f} | {num_signals:<10} | {precision:<10.4f} | {recall:<10.4f} | {f1:<10.4f} | {win_rate:<10.4f}")
 
 if __name__ == "__main__":
-    evaluate_thresholds()
+    tf = sys.argv[1] if len(sys.argv) > 1 else '1min'
+    print(f"Evaluating thresholds for timeframe: {tf}")
+    evaluate_thresholds(tf)

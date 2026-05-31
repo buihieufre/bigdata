@@ -1,6 +1,7 @@
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, from_json
-from pyspark.sql.types import StructType, StructField, StringType, DoubleType, BooleanType
+from pyspark.sql.types import (StructType, StructField, StringType,
+                                DoubleType, BooleanType, LongType)
 import os
 import datetime
 
@@ -15,10 +16,10 @@ FLUSH_EVERY = 100  # Ghi lên HDFS mỗi 100 tín hiệu
 def flush_signals_to_hdfs(spark):
     """Ghi buffer tín hiệu lên HDFS dưới dạng Parquet (append)"""
     global SIGNAL_BUFFER
-    
+
     if not SIGNAL_BUFFER:
         return
-    
+
     try:
         import pandas as pd
         pdf = pd.DataFrame(SIGNAL_BUFFER)
@@ -33,51 +34,58 @@ def flush_signals_to_hdfs(spark):
 def process_batch(df, epoch_id):
     """
     Process each micro-batch.
-    Since technical indicators need a rolling window, we pass the data to realtime module.
+    ICT features need full OHLCV + timestamp rolling window.
     """
     import pandas as pd
-    from realtime_features import RealtimeFeatureGenerator
-    from realtime_predict import RealtimePredictor
-    import json
-    
+    from realtime_features import RealtimeICTFeatureGenerator
+    from realtime_predict import RealtimeICTPredictor
+    from pyspark.sql.functions import col
+
     global SIGNAL_BUFFER
-    
-    # Collect to pandas for processing (in a real highly distributed setup we'd use mapInPandas
-    # but for a single symbol stream, collecting is efficient enough)
+
+    # ── Append raw data to HDFS Data Lake ──────────────────────
+    try:
+        raw_to_append = df.select(
+            (col("timestamp") / 1000).cast("timestamp").alias("timestamp"),
+            "open", "high", "low", "close", "volume"
+        )
+        raw_to_append.write.mode("append").parquet("hdfs://127.0.0.1:9000/user/hdoop/bigdata/raw/btc_raw.parquet")
+    except Exception as e:
+        print(f"  ✗ Failed to append raw data to HDFS: {e}")
+
     pdf = df.toPandas()
-    
+
     if pdf.empty:
         return
-        
-    # Process each row
+
     for _, row in pdf.iterrows():
-        # Add to window and get features
-        features = RealtimeFeatureGenerator.update(row['close'], row['volume'])
-        
+        # Pass full OHLCV + timestamp_ms to ICT generator
+        features = RealtimeICTFeatureGenerator.update(
+            open_        = row['open'],
+            high         = row['high'],
+            low          = row['low'],
+            close        = row['close'],
+            volume       = row['volume'],
+            timestamp_ms = int(row['timestamp']),
+        )
+
         if features is not None:
-            # Predict
-            prediction = RealtimePredictor.predict(features)
-            
+            prediction = RealtimeICTPredictor.predict(features)
+
             output = {
-                "symbol": row['symbol'],
-                "close": row['close'],
-                "prediction": prediction['signal'],
-                "probability": float(prediction['prob']),
-                "timestamp": datetime.datetime.now().isoformat(),
+                "symbol":           row['symbol'],
+                "close":            row['close'],
+                "bias":             prediction['bias'],
+                "probability_up":   float(prediction['probability_up']),
+                "probability_down": float(prediction['probability_down']),
+                "ict_context":      prediction.get('ict_context', ''),
+                "timestamp":        datetime.datetime.now().isoformat(),
             }
-            
-            # Print to console
-            print(f"REALTIME SIGNAL: {output}")
-            
-            # Save to local file (append)
-            os.makedirs('output', exist_ok=True)
-            with open('output/signals.jsonl', 'a') as f:
-                f.write(json.dumps(output) + '\n')
-            
-            # Buffer cho HDFS
+
+            print(f"ICT SIGNAL: {output}")
+
             SIGNAL_BUFFER.append(output)
-            
-            # Flush lên HDFS khi đủ batch
+
             if len(SIGNAL_BUFFER) >= FLUSH_EVERY:
                 flush_signals_to_hdfs(df.sparkSession)
 
@@ -87,38 +95,37 @@ def main():
         .appName("CryptoTradingAdvisor") \
         .config("spark.sql.streaming.checkpointLocation", "checkpoints/") \
         .getOrCreate()
-        
+
     spark.sparkContext.setLogLevel("ERROR")
-    
-    # Define schema for the incoming JSON
+
+    # Schema mở rộng — full OHLCV + timestamp (ms) cho ICT features
     schema = StructType([
-        StructField("symbol", StringType(), True),
-        StructField("close", DoubleType(), True),
-        StructField("volume", DoubleType(), True),
-        StructField("is_closed", BooleanType(), True)
+        StructField("symbol",    StringType(),  True),
+        StructField("open",      DoubleType(),  True),
+        StructField("high",      DoubleType(),  True),
+        StructField("low",       DoubleType(),  True),
+        StructField("close",     DoubleType(),  True),
+        StructField("volume",    DoubleType(),  True),
+        StructField("timestamp", LongType(),    True),   # kline open time ms UTC
+        StructField("is_closed", BooleanType(), True),
     ])
-    
-    # Read from TCP Socket
+
     raw_stream = spark.readStream \
         .format("socket") \
         .option("host", "127.0.0.1") \
         .option("port", 9999) \
         .load()
-        
-    # Parse JSON
+
     parsed_stream = raw_stream.select(
         from_json(col("value"), schema).alias("data")
     ).select("data.*")
-    
-    # We only want to process when the 1s candle is closed (optional, but good for stability)
-    # However, to be fully realtime, we process everything.
-    
-    # Write stream
+
     query = parsed_stream.writeStream \
         .foreachBatch(process_batch) \
         .start()
-        
+
     query.awaitTermination()
+
 
 if __name__ == "__main__":
     main()
